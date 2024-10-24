@@ -1,5 +1,3 @@
-"use client";
-
 import { BryntumScheduler } from "@bryntum/scheduler-react";
 import { useEffect, useRef, useState } from "react";
 
@@ -14,11 +12,47 @@ const generateResources = () => {
   return resources;
 };
 
+const generateNonWorkingRanges = () => {
+  const nonWorkingRanges = [];
+  const startDate = new Date(2024, 9, 1); // October 1, 2024
+  const endDate = new Date(2024, 9, 31); // October 31, 2024
+
+  for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
+    const day = d.getDay();
+
+    if (day === 0 || day === 6) {
+      // Weekend: full day non-working
+      const weekendDay = new Date(d); // Clone date
+      nonWorkingRanges.push({
+        startDate: new Date(weekendDay.setHours(0, 0, 0, 0)), // Create new Date
+        endDate: new Date(weekendDay.setHours(24, 0, 0, 0)), // Create new Date
+        cls: "non-working-range",
+      });
+    } else {
+      // Weekday: non-working from 10 PM (22:00) to 6 AM (06:00) the next day
+      const startNonWorking = new Date(d); // Clone date
+      startNonWorking.setHours(22, 0, 0, 0); // Set start time to 10 PM
+
+      const endNonWorking = new Date(d); // Clone date again
+      endNonWorking.setDate(d.getDate() + 1); // Move to the next day for 6 AM
+      endNonWorking.setHours(6, 0, 0, 0); // Set end time to 6 AM
+
+      nonWorkingRanges.push({
+        startDate: startNonWorking,
+        endDate: endNonWorking,
+        cls: "non-working-range",
+      });
+    }
+  }
+
+  return nonWorkingRanges;
+};
+
 const generateEvents = () => {
   const events = [];
 
   // Starting date reference (October 10, 2024)
-  const baseDate = new Date(2024, 9, 10); // month is 9 because months are 0-indexed
+  const baseDate = new Date(2024, 9, 20); // month is 9 because months are 0-indexed
 
   for (let i = 1; i <= 5000; i++) {
     const resourceId = Math.trunc(i / 100) + 1;
@@ -49,8 +83,7 @@ const generateEvents = () => {
   return events;
 };
 
-// Function to detect overlapping events
-const detectOverlapsAndPaintRed = (events) => {
+const detectOverlaps = (events, resourceIds = []) => {
   const overlappingEvents = new Set();
 
   // Group events by resourceId
@@ -60,8 +93,17 @@ const detectOverlapsAndPaintRed = (events) => {
     return acc;
   }, {});
 
-  // For each resource, check for overlapping events
-  Object.values(eventsByResource).forEach((resourceEvents) => {
+  // Filter to check only the events for the specified resources, or all if no resourceIds are provided
+  const resourcesToCheck = resourceIds.length
+    ? resourceIds.reduce((acc, resourceId) => {
+        if (eventsByResource[resourceId])
+          acc[resourceId] = eventsByResource[resourceId];
+        return acc;
+      }, {})
+    : eventsByResource;
+
+  // Check for overlaps for each resource's events
+  Object.values(resourcesToCheck).forEach((resourceEvents) => {
     for (let i = 0; i < resourceEvents.length; i++) {
       for (let j = i + 1; j < resourceEvents.length; j++) {
         const event1 = resourceEvents[i];
@@ -80,12 +122,18 @@ const detectOverlapsAndPaintRed = (events) => {
     }
   });
 
-  // Paint overlapping events red
+  // Update only the affected events (those in the specified resources) and keep others untouched
   return events.map((event) => {
-    if (overlappingEvents.has(event.id)) {
+    // If resourceIds is empty, check all events; otherwise, check specific resources
+    if (
+      (!resourceIds.length || resourceIds.includes(event.resourceId)) &&
+      overlappingEvents.has(event.id)
+    ) {
       return { ...event, style: "background-color: red" };
+    } else if (!resourceIds.length || resourceIds.includes(event.resourceId)) {
+      return { ...event, style: "" }; // Reset style if no overlap within the specific resources
     }
-    return { ...event, style: "" }; // Reset style if no overlap
+    return event; // Return the event unchanged if it's not part of the specified resources
   });
 };
 
@@ -117,30 +165,40 @@ const generateRandomDependencies = (count) => {
   });
 };
 
-export default function Scheduler({ ...props }) {
+const isTickInOffTime = (tick, offZones) => {
+  return offZones.some((offZone) => {
+    return (
+      tick.startDate >= offZone.startDate && tick.endDate <= offZone.endDate
+    );
+  });
+};
+
+export default function Scheduler() {
   const [events, setEvents] = useState([]);
   const [resources, setResources] = useState([]);
   const [dependencies, setDependencies] = useState([]);
+  const [nonWorkingRanges, setNonWorkingRanges] = useState([]);
 
   const schedulerRef = useRef(null);
 
   const init = () => {
     const generatedResources = generateResources();
-    let generatedEvents = generateEvents();
-
-    // Detect overlaps and paint them red
-    generatedEvents = detectOverlapsAndPaintRed(generatedEvents);
-
     setResources(generatedResources);
+    let generatedEvents = generateEvents();
+    // Detect overlaps for all events
+    generatedEvents = detectOverlaps(generatedEvents);
     setEvents(generatedEvents);
     setDependencies(generateRandomDependencies(5000));
+    setNonWorkingRanges(generateNonWorkingRanges());
   };
 
-  // Function to handle event drop and recalculate overlaps
+  // Handle event drop
   const handleEventDrop = (e) => {
     const scheduler = schedulerRef?.current?.instance;
     if (!scheduler) return;
 
+    const oldResourceId = e.resourceRecord.id;
+    const newResourceId = e.targetResourceRecord.id;
     const updatedEvents = scheduler.events.map((event) => ({
       id: event.id,
       name: event.name,
@@ -149,15 +207,50 @@ export default function Scheduler({ ...props }) {
       endDate: event.endDate,
     }));
 
-    // Detect overlaps and update the events in the scheduler
-    const newEvents = detectOverlapsAndPaintRed(updatedEvents);
-    setEvents(newEvents); // Update the state with the new event styles
+    // Detect overlaps for both old and new resource events
+    let newEvents = detectOverlaps(updatedEvents, [
+      oldResourceId,
+      newResourceId,
+    ]);
+
+    setEvents(newEvents); // Update the state with new event styles
   };
 
-  useEffect(() => {
-    // Bryntum Scheduler instance
+  // Handle event resize
+  const handleEventResize = (e) => {
     const scheduler = schedulerRef?.current?.instance;
-  }, []);
+    if (!scheduler) return;
+
+    const resourceId = e.resourceRecord.id;
+    const updatedEvents = scheduler.events.map((event) => ({
+      id: event.id,
+      name: event.name,
+      resourceId: event.resourceId,
+      startDate: event.startDate,
+      endDate: event.endDate,
+    }));
+
+    // Detect overlaps only for the resource events
+    const newEvents = detectOverlaps(updatedEvents, [resourceId]);
+    setEvents(newEvents); // Update the state with new event styles
+  };
+
+  const handleHideNonWorkingRanges = async ({ checked }) => {
+    const scheduler = schedulerRef?.current?.instance;
+    if (!scheduler) return;
+    console.log("handleHideNonWorkingRanges");
+    if (checked) {
+      const timeRanges = scheduler.timeRanges.map((timeRange) => ({
+        startDate: timeRange.startDate,
+        endDate: timeRange.endDate,
+      }));
+      scheduler.timeAxis.filterBy((tick) => {
+        return !isTickInOffTime(tick, timeRanges);
+      });
+    } else {
+      scheduler.timeAxis.clearFilters();
+    }
+  };
 
   useEffect(() => {
     init();
@@ -166,19 +259,109 @@ export default function Scheduler({ ...props }) {
   return (
     <>
       <BryntumScheduler
-        {...props}
         ref={schedulerRef}
+        //Data
         events={events}
         dependencies={dependencies}
         resources={resources}
-        eventMenuFeature={false}
+        timeRanges={nonWorkingRanges}
+        //Default settings
+        visibleDate={{
+          date: new Date(), // Today
+          block: "center",
+        }}
+        viewPreset="hourAndDay" // 1hour tick
+        minZoomLevel={12} // 1day tick
+        maxZoomLevel={20} // 5min tick
+        infiniteScroll={true}
+        minDate={new Date(2024, 9, 1)} // October 1, 2024
+        maxDate={new Date(2024, 9, 31)} // October 2, 2024
+        //Disabled features
         dependencyEditFeature={false}
         eventDragCreateFeature={false}
-        eventDragSelectFeature={true}
+        eventDragSelectFeature={false}
         dependenciesFeature={{
           allowCreate: false,
+          disabled: true,
         }}
-        onEventDrop={handleEventDrop} // Attach the event drop handler
+        scheduleMenuFeature={false}
+        cellMenuFeature={false}
+        headerMenuFeature={false}
+        //Enabled features
+        eventMenuFeature={{
+          items: {
+            editEvent: false,
+            deleteEvent: false,
+            copyEvent: false,
+            cutEvent: false,
+            showAddtionalInfo: {
+              text: "Tooltip",
+              icon: "b-fa b-fa-fw b-fa-info-circle",
+              weight: 200,
+              onItem: (data) => {
+                alert("Custom action clicked");
+              },
+            },
+            showAdditionalFields: {
+              text: "additional fields",
+              icon: "b-fa b-fa-fw b-fa-folder-plus",
+              weight: 200,
+              onItem: (data) => {
+                alert("Custom action clicked");
+              },
+            },
+            showGroupedBatches: {
+              text: "Grouped Batches",
+              icon: "b-fa b-fa-fw b-fa-object-ungroup",
+              weight: 200,
+              onItem: (data) => {
+                alert("Custom action clicked");
+              },
+            },
+          },
+        }}
+        timeRangesFeature={{
+          showCurrentTimeLine: true,
+          showHeaderElements: false,
+        }}
+        timeAxisHeaderMenuFeature={{
+          items: {
+            zoomLevel: false,
+            dateRange: true,
+            currentTimeLine: false,
+          },
+        }}
+        //Event listeners
+        onEventDrop={handleEventDrop}
+        onEventResizeEnd={handleEventResize}
+        //Toolbar
+        tbar={[
+          {
+            type: "check",
+            text: "show dependencies",
+            onChange: ({ checked }) => {
+              schedulerRef.current.instance.features.dependencies.disabled =
+                !checked;
+            },
+          },
+          {
+            type: "check", //nonWorkingRanges
+            text: "hide off zones",
+            onChange: handleHideNonWorkingRanges,
+          },
+          {
+            type: "button",
+            text: "scroll to date",
+            onClick: () => {
+              schedulerRef.current.instance.scrollToDate(
+                new Date(2024, 9, 23, 12, 0, 0),
+                {
+                  block: "center",
+                }
+              );
+            },
+          },
+        ]}
       />
     </>
   );

@@ -7,3 +7,14 @@ html {
   font-family: Poppins, "Open Sans", Helvetica, Arial, sans-serif;
   font-size: 14px;
 }
+
+.non-working-range {
+  background: repeating-linear-gradient(
+    -55deg,
+    #ddd,
+    #ddd 10px,
+    #eee 5px,
+    #eee 20px
+  );
+  opacity: 0.7;
+}

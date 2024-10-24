@@ -1,5 +1,4 @@
 import dynamic from "next/dynamic";
-import { schedulerConfig } from "@/configs/schedulerConfig";
 
 const Scheduler = dynamic(() => import("./Scheduler"), {
   ssr: false,
@@ -22,7 +21,7 @@ const Scheduler = dynamic(() => import("./Scheduler"), {
 const SchedulerWrapper = () => {
   return (
     <>
-      <Scheduler {...schedulerConfig} />
+      <Scheduler />
     </>
   );
 };
