@@ -1,15 +1,63 @@
-import { BryntumScheduler } from "@bryntum/scheduler-react";
 import { useEffect, useRef, useState } from "react";
+import { BryntumScheduler } from "@bryntum/scheduler-react";
+// Constants
+const RESOURCES_SIZE = 50;
+const EVENTS_SIZE = 5000;
+const AVOID_END_IN_OFF_ZONE = true;
 
 const generateResources = () => {
   const resources = [];
-  for (let i = 1; i <= 50; i++) {
+  for (let i = 1; i <= RESOURCES_SIZE; i++) {
     resources.push({
       id: i,
       name: `Resource ${i}`,
+      operations: [`Operation ${i}`, `Operation ${i + 1}`],
     });
   }
   return resources;
+};
+
+const generateEvents = () => {
+  const events = [];
+
+  // Starting date reference (October 10, 2024)
+  const baseDate = new Date(2024, 9, 25); // month is 9 because months are 0-indexed
+
+  for (let i = 1; i <= EVENTS_SIZE; i++) {
+    const resourceId = Math.trunc(i / (EVENTS_SIZE / RESOURCES_SIZE)) + 1;
+
+    // Calculate the day for the event (e.g., events 1-10 go on Oct 10, events 11-20 on Oct 11, etc.)
+    const dayOffset = Math.trunc(
+      ((i - 1) % (EVENTS_SIZE / RESOURCES_SIZE)) / 10
+    );
+
+    // Generate random overlap: 50% chance for an event to overlap with the previous one
+    const overlap = i % 7 === 0 ? 0.5 : 0; // 0.5 hours overlap for every second event
+
+    // Calculate start and end times (1-hour duration, each event starts after the previous one)
+    const eventStartDate = new Date(baseDate);
+    eventStartDate.setDate(baseDate.getDate() + dayOffset);
+    eventStartDate.setHours(6 + ((i - 1) % 10) - overlap); // Adjust to overlap
+
+    const eventEndDate = new Date(eventStartDate);
+    eventEndDate.setHours(eventStartDate.getHours() + 1); // Event lasts for 1 hour
+
+    events.push({
+      id: i,
+      name: `Event ${i}`,
+      resourceId: resourceId,
+      startDate: eventStartDate,
+      endDate: eventEndDate,
+      eventColor: "green",
+      operation: `Operation ${resourceId}`,
+      machineRestrictions: Array.from(
+        { length: Math.floor(Math.random() * 3) },
+        (_, i) => resourceId - i
+      ),
+    });
+  }
+
+  return events;
 };
 
 const generateNonWorkingRanges = () => {
@@ -48,39 +96,33 @@ const generateNonWorkingRanges = () => {
   return nonWorkingRanges;
 };
 
-const generateEvents = () => {
-  const events = [];
+const generateRandomDependencies = () => {
+  const dependencies = new Set(); // Use Set to avoid duplicate dependencies
 
-  // Starting date reference (October 10, 2024)
-  const baseDate = new Date(2024, 9, 20); // month is 9 because months are 0-indexed
+  // Generate random dependencies
+  for (let i = 1; i <= EVENTS_SIZE; i++) {
+    let fromId, toId;
 
-  for (let i = 1; i <= 5000; i++) {
-    const resourceId = Math.trunc(i / 100) + 1;
+    do {
+      // Randomly select fromId and toId (ensure fromId < toId)
+      fromId = Math.floor(Math.random() * EVENTS_SIZE) + 1;
+      toId = Math.floor(Math.random() * EVENTS_SIZE) + 1;
+    } while (fromId >= toId || dependencies.has(`${fromId}-${toId}`)); // Ensure no backward or duplicate dependencies
 
-    // Calculate the day for the event (e.g., events 1-10 go on Oct 10, events 11-20 on Oct 11, etc.)
-    const dayOffset = Math.trunc(((i - 1) % 100) / 10);
-
-    // Generate random overlap: 50% chance for an event to overlap with the previous one
-    const overlap = i % 7 === 0 ? 0.5 : 0; // 0.5 hours overlap for every second event
-
-    // Calculate start and end times (1-hour duration, each event starts after the previous one)
-    const eventStartDate = new Date(baseDate);
-    eventStartDate.setDate(baseDate.getDate() + dayOffset);
-    eventStartDate.setHours(6 + ((i - 1) % 10) - overlap); // Adjust to overlap
-
-    const eventEndDate = new Date(eventStartDate);
-    eventEndDate.setHours(eventStartDate.getHours() + 1); // Event lasts for 1 hour
-
-    events.push({
-      id: i,
-      name: `Event ${i}`,
-      resourceId: resourceId,
-      startDate: eventStartDate,
-      endDate: eventEndDate,
-    });
+    // Add the dependency to the set
+    dependencies.add(`${fromId}-${toId}`);
   }
 
-  return events;
+  // Convert Set into an array of dependency objects
+  return Array.from(dependencies).map((dep, index) => {
+    const [from, to] = dep.split("-").map(Number);
+    return {
+      id: index + 1, // Unique ID for each dependency
+      from,
+      to,
+      // cls: ["", "merged-dependency", "predecessor-dependency"][index % 3],
+    };
+  });
 };
 
 const detectOverlaps = (events, resourceIds = []) => {
@@ -123,46 +165,34 @@ const detectOverlaps = (events, resourceIds = []) => {
   });
 
   // Update only the affected events (those in the specified resources) and keep others untouched
-  return events.map((event) => {
-    // If resourceIds is empty, check all events; otherwise, check specific resources
-    if (
-      (!resourceIds.length || resourceIds.includes(event.resourceId)) &&
-      overlappingEvents.has(event.id)
-    ) {
-      return { ...event, style: "background-color: red" };
-    } else if (!resourceIds.length || resourceIds.includes(event.resourceId)) {
-      return { ...event, style: "" }; // Reset style if no overlap within the specific resources
+  return events.reduce((acc, event) => {
+    if (!resourceIds.length || resourceIds.includes(event.resourceId)) {
+      const newColor = overlappingEvents.has(event.id) ? "red" : "green";
+      if (event.currentColor !== newColor) {
+        acc.push({
+          id: event.id,
+          eventColor: newColor,
+        });
+      }
     }
-    return event; // Return the event unchanged if it's not part of the specified resources
-  });
+    return acc;
+  }, []);
 };
 
-const generateRandomDependencies = (count) => {
-  const dependencies = new Set(); // Use Set to avoid duplicate dependencies
-
-  // Generate random dependencies
-  for (let i = 1; i <= count; i++) {
-    let fromId, toId;
-
-    do {
-      // Randomly select fromId and toId (ensure fromId < toId)
-      fromId = Math.floor(Math.random() * count) + 1;
-      toId = Math.floor(Math.random() * count) + 1;
-    } while (fromId >= toId || dependencies.has(`${fromId}-${toId}`)); // Ensure no backward or duplicate dependencies
-
-    // Add the dependency to the set
-    dependencies.add(`${fromId}-${toId}`);
-  }
-
-  // Convert Set into an array of dependency objects
-  return Array.from(dependencies).map((dep, index) => {
-    const [from, to] = dep.split("-").map(Number);
-    return {
-      id: index + 1, // Unique ID for each dependency
-      from,
-      to,
-    };
-  });
+const detectDependenciesErrors = (dependencies) => {
+  return dependencies.reduce((acc, dep) => {
+    const cls =
+      dep.fromEventEndDate > dep.toEventStartDate
+        ? "error-dependency"
+        : dep.originalCls;
+    if (dep.cls !== cls) {
+      acc.push({
+        id: dep.id,
+        cls,
+      });
+    }
+    return acc;
+  }, []);
 };
 
 const isTickInOffTime = (tick, offZones) => {
@@ -171,6 +201,21 @@ const isTickInOffTime = (tick, offZones) => {
       tick.startDate >= offZone.startDate && tick.endDate <= offZone.endDate
     );
   });
+};
+
+const isDateInOffTime = (date, offZones) => {
+  return offZones.some((offZone) => {
+    return date > offZone.startDate && date < offZone.endDate;
+  });
+};
+
+const isEventInOffTime = (startDate, endDate, offZones) => {
+  const isEndInOffTime =
+    AVOID_END_IN_OFF_ZONE && isDateInOffTime(endDate, offZones);
+  const isStartInOffTime =
+    !isEndInOffTime && isDateInOffTime(startDate, offZones);
+
+  return isStartInOffTime || isEndInOffTime;
 };
 
 export default function Scheduler() {
@@ -184,47 +229,70 @@ export default function Scheduler() {
   const init = () => {
     const generatedResources = generateResources();
     setResources(generatedResources);
-    let generatedEvents = generateEvents();
-    // Detect overlaps for all events
-    generatedEvents = detectOverlaps(generatedEvents);
-    setEvents(generatedEvents);
-    setDependencies(generateRandomDependencies(5000));
+    setEvents(generateEvents());
+    setDependencies(generateRandomDependencies());
     setNonWorkingRanges(generateNonWorkingRanges());
   };
 
   // Handle event drop
-  const handleEventDrop = (e) => {
+  const handleEventDrop = ({
+    resourceRecord,
+    targetResourceRecord,
+    eventRecords,
+  }) => {
     const scheduler = schedulerRef?.current?.instance;
-    if (!scheduler) return;
+    if (!scheduler || !scheduler.customData?.showErrors) return;
 
-    const oldResourceId = e.resourceRecord.id;
-    const newResourceId = e.targetResourceRecord.id;
+    const oldResourceId = resourceRecord.id;
+    const newResourceId = targetResourceRecord.id;
     const updatedEvents = scheduler.events.map((event) => ({
       id: event.id,
       name: event.name,
+      currentColor: event.eventColor,
       resourceId: event.resourceId,
       startDate: event.startDate,
       endDate: event.endDate,
     }));
 
     // Detect overlaps for both old and new resource events
-    let newEvents = detectOverlaps(updatedEvents, [
+    const newEvents = detectOverlaps(updatedEvents, [
       oldResourceId,
       newResourceId,
     ]);
 
-    setEvents(newEvents); // Update the state with new event styles
+    scheduler.eventStore.applyChangeset({
+      updated: newEvents,
+    });
+
+    // Detect dependencies errors for the event dropped
+    const eventDropped = eventRecords[0];
+    const updatedDependencies = eventDropped.predecessors
+      .concat(eventDropped.successors)
+      .map((dep) => ({
+        id: dep.id,
+        cls: dep.cls,
+        originalCls: dep.originalData.cls,
+        fromEventEndDate: dep.fromEvent.endDate,
+        toEventStartDate: dep.toEvent.startDate,
+      }));
+    const newDependencies = detectDependenciesErrors(updatedDependencies);
+
+    scheduler.dependencyStore.applyChangeset({
+      updated: newDependencies,
+    });
   };
 
   // Handle event resize
-  const handleEventResize = (e) => {
+  const handleEventResize = ({ changed, resourceRecord, eventRecord }) => {
+    if (!changed) return;
     const scheduler = schedulerRef?.current?.instance;
-    if (!scheduler) return;
+    if (!scheduler || !scheduler.customData?.showErrors) return;
 
-    const resourceId = e.resourceRecord.id;
+    const resourceId = resourceRecord.id;
     const updatedEvents = scheduler.events.map((event) => ({
       id: event.id,
       name: event.name,
+      currentColor: event.eventColor,
       resourceId: event.resourceId,
       startDate: event.startDate,
       endDate: event.endDate,
@@ -232,13 +300,31 @@ export default function Scheduler() {
 
     // Detect overlaps only for the resource events
     const newEvents = detectOverlaps(updatedEvents, [resourceId]);
-    setEvents(newEvents); // Update the state with new event styles
+    scheduler.eventStore.applyChangeset({
+      updated: newEvents,
+    });
+
+    // Detect dependencies errors for the event dropped
+    const updatedDependencies = eventRecord.predecessors
+      .concat(eventRecord.successors)
+      .map((dep) => ({
+        id: dep.id,
+        cls: dep.cls,
+        originalCls: dep.originalData.cls,
+        fromEventEndDate: dep.fromEvent.endDate,
+        toEventStartDate: dep.toEvent.startDate,
+      }));
+    const newDependencies = detectDependenciesErrors(updatedDependencies);
+
+    scheduler.dependencyStore.applyChangeset({
+      updated: newDependencies,
+    });
   };
 
   const handleHideNonWorkingRanges = async ({ checked }) => {
     const scheduler = schedulerRef?.current?.instance;
     if (!scheduler) return;
-    console.log("handleHideNonWorkingRanges");
+
     if (checked) {
       const timeRanges = scheduler.timeRanges.map((timeRange) => ({
         startDate: timeRange.startDate,
@@ -260,6 +346,12 @@ export default function Scheduler() {
     <>
       <BryntumScheduler
         ref={schedulerRef}
+        columns={[
+          {
+            text: "Name",
+            field: "name",
+          },
+        ]}
         //Data
         events={events}
         dependencies={dependencies}
@@ -283,6 +375,7 @@ export default function Scheduler() {
         dependenciesFeature={{
           allowCreate: false,
           disabled: true,
+          markerDef: "",
         }}
         scheduleMenuFeature={false}
         cellMenuFeature={false}
@@ -334,6 +427,43 @@ export default function Scheduler() {
         //Event listeners
         onEventDrop={handleEventDrop}
         onEventResizeEnd={handleEventResize}
+        onBeforeEventDropFinalize={({ source, context }) => {
+          // Avoid dropping events in off zones
+          const { startDate, endDate } = context;
+          const offZones = source.timeRanges.map((tr) => ({
+            startDate: tr.startDate,
+            endDate: tr.endDate,
+          }));
+          if (isEventInOffTime(startDate, endDate, offZones)) {
+            return (context.valid = false);
+          }
+          // Avoid dropping events in WCs with different operations
+          const { eventRecords, newResource } = context;
+          if (!newResource.operations.includes(eventRecords[0].operation)) {
+            return (context.valid = false);
+          }
+          // Take in consideration the machine restrictions
+          const machineRestrictions = eventRecords[0].machineRestrictions || [];
+          if (
+            machineRestrictions.length &&
+            !machineRestrictions.includes(newResource.id)
+          ) {
+            return (context.valid = false);
+          }
+        }}
+        onBeforeEventResizeFinalize={({
+          source,
+          startDate,
+          endDate,
+          finalize,
+        }) => {
+          // Avoid resizing events in off zones
+          const offZones = source.timeRanges.map((tr) => ({
+            startDate: tr.startDate,
+            endDate: tr.endDate,
+          }));
+          return finalize(!isEventInOffTime(startDate, endDate, offZones));
+        }}
         //Toolbar
         tbar={[
           {
@@ -350,17 +480,64 @@ export default function Scheduler() {
             onChange: handleHideNonWorkingRanges,
           },
           {
-            type: "button",
-            text: "scroll to date",
-            onClick: () => {
-              schedulerRef.current.instance.scrollToDate(
-                new Date(2024, 9, 23, 12, 0, 0),
-                {
-                  block: "center",
-                }
-              );
+            type: "check", //nonWorkingRanges
+            text: "show errors",
+            onChange: ({ checked }) => {
+              const scheduler = schedulerRef.current.instance;
+              if (!scheduler.customData) {
+                scheduler.customData = {};
+              }
+              scheduler.customData.showErrors = checked;
+              let newEvents = [];
+              let newDependencies = [];
+              if (checked) {
+                // Detect overlaps for all events
+                const updatedEvents = scheduler.events.map((event) => ({
+                  id: event.id,
+                  name: event.name,
+                  currentColor: event.eventColor,
+                  resourceId: event.resourceId,
+                  startDate: event.startDate,
+                  endDate: event.endDate,
+                }));
+                newEvents = detectOverlaps(updatedEvents);
+                // Detect dependencies errors for all events
+                const updatedDependencies = scheduler.dependencies.map(
+                  (dep) => ({
+                    id: dep.id,
+                    cls: dep.cls,
+                    originalCls: dep.originalData.cls,
+                    fromEventEndDate: dep.fromEvent.endDate,
+                    toEventStartDate: dep.toEvent.startDate,
+                  })
+                );
+                newDependencies = detectDependenciesErrors(updatedDependencies);
+              } else {
+                newEvents = scheduler.events.map((event) => ({
+                  id: event.id,
+                  eventColor: event.originalData.eventColor,
+                }));
+                newDependencies = scheduler.dependencies.map((dep) => ({
+                  id: dep.id,
+                  cls: dep.originalData.cls,
+                }));
+              }
+              scheduler.eventStore.applyChangeset({
+                updated: newEvents,
+              });
+              scheduler.dependencyStore.applyChangeset({
+                updated: newDependencies,
+              });
             },
           },
+          // {
+          //   type: "button",
+          //   text: "print scheduler",
+          //   onClick: () => {
+          //     const scheduler = schedulerRef.current.instance;
+          //     console.log("Custom data", scheduler.customData);
+          //   },
+          // },
         ]}
       />
     </>

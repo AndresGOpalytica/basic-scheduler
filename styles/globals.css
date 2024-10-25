@@ -18,3 +18,17 @@ html {
   );
   opacity: 0.7;
 }
+
+.error-dependency {
+  stroke: red !important;
+}
+
+.predecessor-dependency {
+  stroke: #816dfa !important;
+  stroke-dasharray: 5 !important;
+}
+
+.merged-dependency {
+  stroke: #00a2df !important;
+  stroke-dasharray: 5 !important;
+}
