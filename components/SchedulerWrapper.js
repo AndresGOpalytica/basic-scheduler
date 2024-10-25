@@ -1,6 +1,7 @@
 import dynamic from "next/dynamic";
 
-const Scheduler = dynamic(() => import("./Scheduler"), {
+// const Scheduler = dynamic(() => import("./Scheduler"), {
+const Scheduler = dynamic(() => import("./Scheduler.min"), {
   ssr: false,
   loading: () => {
     return (
